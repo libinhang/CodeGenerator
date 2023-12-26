@@ -1,0 +1,88 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Fri May 29 09:25:58 2020
+Text Classification using Bidirectional LSTM with Attention Mechanism
+@author: 
+"""
+
+import copy
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from data_processor import DataProcessor
+
+# Ensure reproducibility by fixing the random seed
+torch.manual_seed(123)
+
+# Define constants
+VOCAB_SIZE = 5000   # Size of the vocabulary
+EMBEDDING_DIM = 100 # Dimension of word embeddings
+NUM_CLASSES = 2     # Number of output classes (binary classification)
+MAX_SENT_LEN = 64   # Maximum sentence length
+HIDDEN_DIM = 16     # Dimension of hidden layer in LSTM
+
+# LSTM configuration
+NUM_LAYERS = 1      # Number of LSTM layers
+BIDIRECTIONAL = True # Use bidirectional LSTM
+LEARNING_RATE = 1e-3
+BATCH_SIZE = 16
+EPOCHS = 10
+
+# Determine the device (CUDA or CPU)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+class BiLSTMAttention(nn.Module):
+    def __init__(self, embedding_dim, hidden_dim, num_layers, bidirectional, num_classes):
+        super(BiLSTMAttention, self).__init__()
+        
+        # LSTM layer
+        self.lstm = nn.LSTM(
+            input_size=embedding_dim,
+            hidden_size=hidden_dim,
+            num_layers=num_layers,
+            bidirectional=bidirectional
+        )
+        
+        # Attention layer
+        self.attention = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(inplace=True)
+        )
+        
+        # Output layer
+        self.output = nn.Linear(hidden_dim, num_classes)
+        self.softmax = nn.Softmax(dim=1)
+    
+    def forward(self, x):
+        x = x.permute(1, 0, 2)  # Reshape input for LSTM
+        batch_size = x.size(1)
+
+        # Initialize hidden and cell states
+        h0 = torch.randn(self.num_layers * 2 if self.bidirectional else 1, 
+                         batch_size, self.hidden_dim).to(device)
+        c0 = torch.randn(self.num_layers * 2 if self.bidirectional else 1, 
+                         batch_size, self.hidden_dim).to(device)
+
+        # LSTM output
+        lstm_out, _ = self.lstm(x, (h0, c0))
+        
+        # Split LSTM output into forward and backward outputs (for bidirectional)
+        if self.bidirectional:
+            forward_out, backward_out = torch.chunk(lstm_out, 2, dim=2)
+            lstm_out = forward_out + backward_out
+
+        lstm_out = lstm_out.permute(1, 0, 2)  # Reshape for attention
+
+        # Compute attention weights
+        attention_input = lstm_out[:, -1, :]  # Use last LSTM output for attention
+        attention_weights = self.attention(attention_input).unsqueeze(1)
+        attention_context = torch.bmm(attention_weights, lstm_out.transpose(1, 2))
+        attention_output = F.softmax(attention_context, dim=-1)
+
+        # Apply attention weights
+        weighted_output = torch.bmm(attention_output, lstm_out).squeeze(1)
+        final_output = self.output(weighted_output)
+        return self.softmax(final_output)
+
+# ... rest of your code remains the same ...
+
